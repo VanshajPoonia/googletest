@@ -1227,7 +1227,7 @@ int UnitTestImpl::test_to_run_count() const {
 // trace but Bar() and CurrentOsStackTraceExceptTop() won't.
 std::string UnitTestImpl::CurrentOsStackTraceExceptTop(int skip_count) {
   return os_stack_trace_getter()->CurrentStackTrace(
-      static_cast<int>(GTEST_FLAG_GET(stack_trace_depth)), skip_count + 1
+      GTEST_FLAG_GET(stack_trace_depth), skip_count + 1
       // Skips the user-specified number of frames plus this function
       // itself.
   );  // NOLINT
@@ -1894,11 +1894,13 @@ bool IsSubstringPred(const char* needle, const char* haystack) {
   return strstr(haystack, needle) != nullptr;
 }
 
+#if GTEST_HAS_STD_WSTRING
 bool IsSubstringPred(const wchar_t* needle, const wchar_t* haystack) {
   if (needle == nullptr || haystack == nullptr) return needle == haystack;
 
   return wcsstr(haystack, needle) != nullptr;
 }
+#endif  // GTEST_HAS_STD_WSTRING
 
 // StringType here can be either ::std::string or ::std::wstring.
 template <typename StringType>
@@ -1940,20 +1942,9 @@ AssertionResult IsSubstring(const char* needle_expr, const char* haystack_expr,
   return IsSubstringImpl(true, needle_expr, haystack_expr, needle, haystack);
 }
 
-AssertionResult IsSubstring(const char* needle_expr, const char* haystack_expr,
-                            const wchar_t* needle, const wchar_t* haystack) {
-  return IsSubstringImpl(true, needle_expr, haystack_expr, needle, haystack);
-}
-
 AssertionResult IsNotSubstring(const char* needle_expr,
                                const char* haystack_expr, const char* needle,
                                const char* haystack) {
-  return IsSubstringImpl(false, needle_expr, haystack_expr, needle, haystack);
-}
-
-AssertionResult IsNotSubstring(const char* needle_expr,
-                               const char* haystack_expr, const wchar_t* needle,
-                               const wchar_t* haystack) {
   return IsSubstringImpl(false, needle_expr, haystack_expr, needle, haystack);
 }
 
@@ -1971,6 +1962,17 @@ AssertionResult IsNotSubstring(const char* needle_expr,
 }
 
 #if GTEST_HAS_STD_WSTRING
+AssertionResult IsSubstring(const char* needle_expr, const char* haystack_expr,
+                            const wchar_t* needle, const wchar_t* haystack) {
+  return IsSubstringImpl(true, needle_expr, haystack_expr, needle, haystack);
+}
+
+AssertionResult IsNotSubstring(const char* needle_expr,
+                               const char* haystack_expr, const wchar_t* needle,
+                               const wchar_t* haystack) {
+  return IsSubstringImpl(false, needle_expr, haystack_expr, needle, haystack);
+}
+
 AssertionResult IsSubstring(const char* needle_expr, const char* haystack_expr,
                             const ::std::wstring& needle,
                             const ::std::wstring& haystack) {
@@ -2200,6 +2202,7 @@ bool String::WideCStringEquals(const wchar_t* lhs, const wchar_t* rhs) {
   return wcscmp(lhs, rhs) == 0;
 }
 
+#if GTEST_HAS_STD_WSTRING
 // Helper function for *_STREQ on wide strings.
 AssertionResult CmpHelperSTREQ(const char* lhs_expression,
                                const char* rhs_expression, const wchar_t* lhs,
@@ -2224,6 +2227,7 @@ AssertionResult CmpHelperSTRNE(const char* s1_expression,
          << "Expected: (" << s1_expression << ") != (" << s2_expression
          << "), actual: " << PrintToString(s1) << " vs " << PrintToString(s2);
 }
+#endif  // GTEST_HAS_STD_WSTRING
 
 // Compares two C strings, ignoring case.  Returns true if and only if they have
 // the same content.
@@ -2718,7 +2722,7 @@ Result HandleSehExceptionsInMethodIfSupported(T* object, Result (T::*method)(),
 }
 
 // Runs the given method and catches and reports C++ and/or SEH-style
-// exceptions, if they are supported; returns the 0-value for type
+// exceptions, if they are supported; returns the default-value for type
 // Result in case of an SEH exception.
 template <class T, typename Result>
 Result HandleExceptionsInMethodIfSupported(T* object, Result (T::*method)(),
@@ -2766,7 +2770,7 @@ Result HandleExceptionsInMethodIfSupported(T* object, Result (T::*method)(),
           TestPartResult::kFatalFailure,
           FormatCxxExceptionMessage(nullptr, location));
     }
-    return static_cast<Result>(0);
+    return Result();
 #else
     return HandleSehExceptionsInMethodIfSupported(object, method, location);
 #endif  // GTEST_HAS_EXCEPTIONS
@@ -4258,8 +4262,7 @@ void XmlUnitTestResultPrinter::OutputXmlCDataSection(::std::ostream* stream,
   for (;;) {
     const char* const next_segment = strstr(segment, "]]>");
     if (next_segment != nullptr) {
-      stream->write(segment,
-                    static_cast<std::streamsize>(next_segment - segment));
+      stream->write(segment, next_segment - segment);
       *stream << "]]>]]&gt;<![CDATA[";
       segment = next_segment + strlen("]]>");
     } else {
@@ -4664,7 +4667,7 @@ std::string JsonUnitTestResultPrinter::EscapeJson(const std::string& str) {
         m << "\\r";
         break;
       default:
-        if (ch < ' ') {
+        if (static_cast<unsigned char>(ch) < ' ' || ch == '\x7F') {
           m << "\\u00" << String::FormatByte(static_cast<unsigned char>(ch));
         } else {
           m << ch;
@@ -5191,9 +5194,12 @@ class ScopedPrematureExitFile {
       // create the file with a single "0" character in it.  I/O
       // errors are ignored as there's nothing better we can do and we
       // don't want to fail the test because of this.
-      FILE* pfile = posix::FOpen(premature_exit_filepath_.c_str(), "w");
-      fwrite("0", 1, 1, pfile);
-      fclose(pfile);
+      if (FILE* pfile = posix::FOpen(premature_exit_filepath_.c_str(), "w")) {
+        fwrite("0", 1, 1, pfile);
+        fclose(pfile);
+      } else {
+        premature_exit_filepath_.clear();
+      }
     }
   }
 
@@ -5211,7 +5217,7 @@ class ScopedPrematureExitFile {
   }
 
  private:
-  const std::string premature_exit_filepath_;
+  std::string premature_exit_filepath_;
 
   ScopedPrematureExitFile(const ScopedPrematureExitFile&) = delete;
   ScopedPrematureExitFile& operator=(const ScopedPrematureExitFile&) = delete;
@@ -5302,17 +5308,8 @@ void TestEventListeners::SuppressEventForwarding(bool suppress) {
 // call this before main() starts, from which point on the return
 // value will never change.
 UnitTest* UnitTest::GetInstance() {
-  // CodeGear C++Builder insists on a public destructor for the
-  // default implementation.  Use this implementation to keep good OO
-  // design with private destructor.
-
-#if defined(__BORLANDC__)
-  static UnitTest* const instance = new UnitTest;
-  return instance;
-#else
   static UnitTest instance;
   return &instance;
-#endif  // defined(__BORLANDC__)
 }
 
 // Gets the number of successful test suites.
@@ -6751,6 +6748,12 @@ static const char kColorEncodedHelpMessage[] =
     "recreate_environments_when_repeating@D\n"
     "      Sets up and tears down the global test environment on each repeat\n"
     "      of the test.\n"
+    "  @G--" GTEST_FLAG_PREFIX_
+    "fail_fast@D\n"
+    "      Stop running tests after the first failure.\n"
+    "  @G--" GTEST_FLAG_PREFIX_
+    "fail_if_no_test_linked@D\n"
+    "      Fail if no test is linked into the test program.\n"
     "\n"
     "Test Output:\n"
     "  @G--" GTEST_FLAG_PREFIX_
@@ -6772,6 +6775,9 @@ static const char kColorEncodedHelpMessage[] =
     "print_test_shuffle_seed=0@D\n"
     "      Don't print the test shuffle seed.\n"
     "  @G--" GTEST_FLAG_PREFIX_
+    "print_utf8=0@D\n"
+    "      Don't print UTF-8 characters as text.\n"
+    "  @G--" GTEST_FLAG_PREFIX_
     "output=@Y(@Gjson@Y|@Gxml@Y)[@G:@YDIRECTORY_PATH@G" GTEST_PATH_SEP_
     "@Y|@G:@YFILE_PATH]@D\n"
     "      Generate a JSON or XML report in the given directory or with the "
@@ -6788,6 +6794,9 @@ static const char kColorEncodedHelpMessage[] =
     "  @G--" GTEST_FLAG_PREFIX_
     "death_test_style=@Y(@Gfast@Y|@Gthreadsafe@Y)@D\n"
     "      Set the default death test style.\n"
+    "  @G--" GTEST_FLAG_PREFIX_
+    "death_test_use_fork@D\n"
+    "      Use fork() instead of clone() to spawn death test child processes.\n"
 #endif  // GTEST_HAS_DEATH_TEST && !GTEST_OS_WINDOWS
     "  @G--" GTEST_FLAG_PREFIX_
     "break_on_failure@D\n"
@@ -6800,6 +6809,9 @@ static const char kColorEncodedHelpMessage[] =
     "catch_exceptions=0@D\n"
     "      Do not report exceptions as test failures. Instead, allow them\n"
     "      to crash the program or throw a pop-up (on Windows).\n"
+    "  @G--" GTEST_FLAG_PREFIX_
+    "stack_trace_depth=@Y[NUMBER]@D\n"
+    "      Maximum number of stack frames to print when an assertion fails.\n"
     "\n"
     "Except for @G--" GTEST_FLAG_PREFIX_
     "list_tests@D, you can alternatively set "
@@ -6876,6 +6888,16 @@ static void LoadFlagsFromFile(const std::string& path) {
     if (!ParseGoogleTestFlag(lines[i].c_str())) g_help_flag = true;
   }
 }
+
+static bool ParseFlagFileFlag(const char* const arg) {
+  std::string flagfile_value;
+  if (!ParseFlag(arg, "flagfile", &flagfile_value)) {
+    return false;
+  }
+  GTEST_FLAG_SET(flagfile, flagfile_value);
+  LoadFlagsFromFile(flagfile_value);
+  return true;
+}
 #endif  // GTEST_USE_OWN_FLAGFILE_FLAG_ && GTEST_HAS_FILE_SYSTEM
 
 // Parses the command line for Google Test flags, without initializing
@@ -6883,7 +6905,6 @@ static void LoadFlagsFromFile(const std::string& path) {
 // instantiated to either char or wchar_t.
 template <typename CharType>
 void ParseGoogleTestFlagsOnlyImpl(int* argc, CharType** argv) {
-  std::string flagfile_value;
   for (int i = 1; i < *argc; i++) {
     const std::string arg_string = StreamableToString(argv[i]);
     const char* const arg = arg_string.c_str();
@@ -6894,9 +6915,7 @@ void ParseGoogleTestFlagsOnlyImpl(int* argc, CharType** argv) {
     if (ParseGoogleTestFlag(arg)) {
       remove_flag = true;
 #if GTEST_USE_OWN_FLAGFILE_FLAG_ && GTEST_HAS_FILE_SYSTEM
-    } else if (ParseFlag(arg, "flagfile", &flagfile_value)) {
-      GTEST_FLAG_SET(flagfile, flagfile_value);
-      LoadFlagsFromFile(flagfile_value);
+    } else if (ParseFlagFileFlag(arg)) {
       remove_flag = true;
 #endif  // GTEST_USE_OWN_FLAGFILE_FLAG_ && GTEST_HAS_FILE_SYSTEM
     } else if (arg_string == "--help" || HasGoogleTestFlagPrefix(arg)) {
@@ -6944,7 +6963,7 @@ void ParseGoogleTestFlagsOnly(int* argc, char** argv) {
   std::vector<char*> positional_args;
   std::vector<absl::UnrecognizedFlag> unrecognized_flags;
   absl::ParseAbseilFlagsOnly(*argc, argv, positional_args, unrecognized_flags);
-  absl::flat_hash_set<absl::string_view> unrecognized;
+  absl::flat_hash_set<std::string_view> unrecognized;
   for (const auto& flag : unrecognized_flags) {
     unrecognized.insert(flag.flag_name);
   }
